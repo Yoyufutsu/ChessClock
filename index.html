@@ -2,13 +2,15 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8" />
-  <title>Chess Clock</title>
+  <title>Dual Timer (Lap on stopped side)</title>
   <style>
     html, body {
       margin: 0;
       padding: 0;
       height: 100%;
-      font-family: sans-serif;
+      font-family: "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans JP", sans-serif;
+      background: #fff;
+      color: #111;
     }
 
     .container {
@@ -19,42 +21,77 @@
 
     .panel {
       flex: 1;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      font-size: 4rem;
-      background-color: #f2f2f2;
-      border: 1px solid #ccc;
+      position: relative;               /* for absolute children */
       cursor: pointer;
       user-select: none;
+      background-color: #f7f7f7;
+      border: 1px solid #ddd;
       transition: opacity 0.2s ease, filter 0.2s ease;
-      padding: 1rem;
-      box-sizing: border-box;
+      overflow: hidden;
     }
 
     .panel.inactive {
-      opacity: 0.5;
-      filter: brightness(0.85);
+      opacity: 0.55;
+      filter: brightness(0.9);
     }
 
     .right {
-      background-color: #eaeaea;
+      background-color: #f2f2f2;
+    }
+
+    /* Center display (timer + message) is fixed vertically so laps don't push it */
+    .display-center {
+      position: absolute;
+      left: 50%;
+      top: 30%;
+      transform: translateX(-50%);
+      text-align: center;
+      pointer-events: none; /* clicks go to panel */
     }
 
     .time {
       font-size: 3.6rem;
       line-height: 1;
+      font-weight: 600;
+      pointer-events: none;
     }
 
     .message {
-      margin-top: 0.6rem;
+      margin-top: 0.4rem;
       font-size: 1rem;
       color: #d33;
       height: 1.2em;
+      pointer-events: none;
+    }
+
+    /* Laps area fixed near bottom; adding items won't move the center display */
+    .laps {
+      position: absolute;
+      left: 50%;
+      bottom: 6%;
+      transform: translateX(-50%);
+      width: 90%;
+      max-height: 38%;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 0.25rem;
+      align-items: flex-start;
+      padding-right: 6px; /* room for scrollbar */
+      box-sizing: border-box;
+      pointer-events: auto;
+    }
+
+    .lap {
+      font-size: 0.9rem;   /* 小さく */
+      color: #666;         /* 薄く */
+      opacity: 0.85;
+      line-height: 1;
+      white-space: nowrap;
     }
 
     .center {
+      width: 220px;
       position: absolute;
       top: 50%;
       left: 50%;
@@ -64,26 +101,41 @@
       flex-direction: column;
       gap: 0.6rem;
       align-items: center;
+      background: rgba(255,255,255,0.9);
+      padding: 0.6rem;
+      border-radius: 8px;
+      box-shadow: 0 6px 18px rgba(0,0,0,0.08);
     }
 
     button {
-      font-size: 1.2rem;
+      font-size: 1.05rem;
       padding: 0.6em 1.2em;
       cursor: pointer;
       width: 160px;
     }
+
+    /* thin scrollbar */
+    .laps::-webkit-scrollbar { height: 6px; width: 8px; }
+    .laps::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.12); border-radius: 4px; }
+    .laps::-webkit-scrollbar-track { background: rgba(0,0,0,0.03); border-radius: 4px; }
   </style>
 </head>
 <body>
   <div class="container">
-    <div class="panel" id="leftTimer">
-      <div class="time" id="leftTime">0.00</div>
-      <div class="message" id="leftMsg"></div>
+    <div class="panel" id="leftTimer" title="左パネルをクリックで交代">
+      <div class="display-center">
+        <div class="time" id="leftTime">0.00</div>
+        <div class="message" id="leftMsg"></div>
+      </div>
+      <div class="laps" id="leftLaps" aria-label="左のラップタイム一覧"></div>
     </div>
 
-    <div class="panel right" id="rightTimer">
-      <div class="time" id="rightTime">0.00</div>
-      <div class="message" id="rightMsg"></div>
+    <div class="panel right" id="rightTimer" title="右パネルをクリックで交代">
+      <div class="display-center">
+        <div class="time" id="rightTime">0.00</div>
+        <div class="message" id="rightMsg"></div>
+      </div>
+      <div class="laps" id="rightLaps" aria-label="右のラップタイム一覧"></div>
     </div>
 
     <div class="center">
@@ -103,8 +155,8 @@
     let paused = true;        // whether paused
 
     // default values (in seconds)
-    let initialTime = 10.0; // fallback if user cancels popup
-    let zeroTime = 5.0;     // seconds for zero-mode
+    let initialTime = 10.0;
+    let zeroTime = 5.0;
 
     let times = {
       [LEFT]: 0,
@@ -117,10 +169,22 @@
       [RIGHT]: false
     };
 
-    // preserveOnResume[side] === true means: when paused by user, keep the remaining time for zero-mode.
+    // preserveOnResume: when user pauses explicitly, keep remaining time for zero-mode
     let preserveOnResume = {
       [LEFT]: false,
       [RIGHT]: false
+    };
+
+    // lap arrays
+    let laps = {
+      [LEFT]: [],
+      [RIGHT]: []
+    };
+
+    // start timestamps for current turn (for lap measurement)
+    let sideStartTime = {
+      [LEFT]: null,
+      [RIGHT]: null
     };
 
     // DOM refs
@@ -136,15 +200,19 @@
       [LEFT]: document.getElementById("leftMsg"),
       [RIGHT]: document.getElementById("rightMsg")
     };
+    const lapsEls = {
+      [LEFT]: document.getElementById("leftLaps"),
+      [RIGHT]: document.getElementById("rightLaps")
+    };
     const toggleButton = document.getElementById("toggleButton");
 
     // ask user for configuration on load
-    // initialTime: input in minutes (分). It's converted to seconds.
-    // zeroTime: input in seconds (秒).
+    // initialTime: minutes input -> convert to seconds
+    // zeroTime: seconds input
     function askConfig() {
       const initMin = parseFloat(prompt(
         "初期カウントダウン時間を分単位で入力してください",
-        "2" // ~10秒
+        "2"
       ));
       const zeroSec = parseFloat(prompt(
         "0到達後に使う時間を秒単位で入力してください",
@@ -152,8 +220,6 @@
       ));
 
       if (!isNaN(initMin) && initMin > 0) initialTime = initMin * 60;
-      // If user cancels or enters invalid, keep fallback initialTime (seconds)
-
       if (!isNaN(zeroSec) && zeroSec >= 0) zeroTime = zeroSec;
 
       times[LEFT] = initialTime;
@@ -168,13 +234,21 @@
       panels[LEFT].classList.toggle("inactive", currentSide !== LEFT || timerId === null);
       panels[RIGHT].classList.toggle("inactive", currentSide !== RIGHT || timerId === null);
 
-      // update toggle label: running -> "一時停止", otherwise "スタート"
       toggleButton.textContent = timerId !== null ? "一時停止" : "スタート";
     }
 
     function clearMessages() {
       msgEls[LEFT].textContent = "";
       msgEls[RIGHT].textContent = "";
+    }
+
+    function addLapToDOM(side, label) {
+      const el = document.createElement("div");
+      el.className = "lap";
+      el.textContent = label;
+      lapsEls[side].appendChild(el);
+      // newest at bottom; auto-scroll so latest lap is visible
+      lapsEls[side].scrollTop = lapsEls[side].scrollHeight;
     }
 
     // Stop the interval.
@@ -188,10 +262,8 @@
 
       if (currentSide !== null) {
         if (byUser) {
-          // preserve whatever remaining time is currently for the side (including zero-mode).
-          preserveOnResume[currentSide] = true;
+          preserveOnResume[currentSide] = true; // preserve remaining for resume
         } else {
-          // not a user-initiated pause: do not preserve zero-mode remaining time
           preserveOnResume[currentSide] = false;
         }
       }
@@ -204,17 +276,18 @@
       currentSide = side;
       paused = false;
 
-      // Clear any message for this side when starting.
+      // clear any message
       msgEls[side].textContent = "";
 
-      // If we're in zero-mode for this side:
-      // - If preserveOnResume[side] is true and times[side] > 0, keep the current remaining time (user paused earlier).
-      // - Otherwise, reset to zeroTime (fresh zero-mode).
+      // zero-mode behavior: keep remaining only if preserveOnResume is true and times>0
       if (isZeroMode[side]) {
         if (!(preserveOnResume[side] && times[side] > 0)) {
           times[side] = zeroTime;
         }
       }
+
+      // record start timestamp for lap measurement
+      sideStartTime[side] = performance.now();
 
       render();
 
@@ -225,7 +298,6 @@
 
         if (times[side] <= 0) {
           times[side] = 0;
-          // stop interval
           clearInterval(timerId);
           timerId = null;
 
@@ -239,7 +311,7 @@
             if (zeroTime > 0) {
               // start zero-mode fresh (reset to zeroTime)
               times[side] = zeroTime;
-              startCountdown(side); // will obey preserveOnResume logic (currently false => reset)
+              startCountdown(side); // will reset sideStartTime for zero-mode lap measurement
             } else {
               // zeroTime == 0 -> immediate auto-stop with message
               msgEls[side].textContent = "0秒に到達しました";
@@ -259,10 +331,44 @@
       }, INTERVAL);
     }
 
-    // switch to opposite side (start it)
-    function switchSide() {
+    // When switching side, record lap for the side that just stopped
+    function recordLapAndSwitch() {
+      const prev = currentSide;
+      if (prev === null) {
+        // nothing to record; just start next
+        switchSideInternal();
+        return;
+      }
+
+      // compute lap elapsed in seconds since start of this run (from sideStartTime[prev])
+      let elapsed = 0;
+      if (sideStartTime[prev] !== null) {
+        elapsed = (performance.now() - sideStartTime[prev]) / 1000;
+      } else {
+        elapsed = 0;
+      }
+
+      // format elapsed with 2 decimal places
+      const label = `Lap ${laps[prev].length + 1}: ${elapsed.toFixed(2)} s`;
+
+      // Append lap under the side that was just stopped (prev), per request.
+      laps[prev].push(label);
+      addLapToDOM(prev, label);
+
+      // Clear previous side start timestamp (end of run)
+      sideStartTime[prev] = null;
+
+      // finally start the next side
+      switchSideInternal();
+    }
+
+    function switchSideInternal() {
       const next = currentSide === LEFT ? RIGHT : LEFT;
       startCountdown(next);
+    }
+
+    function switchSide() {
+      recordLapAndSwitch();
     }
 
     // handle "stop" from user/key/click that causes immediate switch to other side
@@ -277,7 +383,7 @@
 
     // Toggle button behavior:
     // - If running -> treat as user pause: stopCountdown(setPaused=true, byUser=true)
-    // - Else if paused and have an active side -> resume that side
+    // - Else if paused and currentSide exists -> resume that side
     // - Else -> fresh start (initialize and start left)
     toggleButton.addEventListener("click", () => {
       if (timerId !== null) {
@@ -301,6 +407,10 @@
       isZeroMode[RIGHT] = false;
       preserveOnResume[LEFT] = false;
       preserveOnResume[RIGHT] = false;
+      laps[LEFT] = [];
+      laps[RIGHT] = [];
+      lapsEls[LEFT].innerHTML = "";
+      lapsEls[RIGHT].innerHTML = "";
       clearMessages();
       startCountdown(LEFT);
     });
