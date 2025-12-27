@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8" />
-  <title>Dual Timer (Pause preserves zero-mode only when paused by user)</title>
+  <title>Chess Clock</title>
   <style>
     html, body {
       margin: 0;
@@ -101,8 +101,10 @@
     let currentSide = null;   // LEFT or RIGHT
     let timerId = null;       // interval id when running
     let paused = true;        // whether paused
-    let initialTime = 10.0;
-    let zeroTime = 5.0;
+
+    // default values (in seconds)
+    let initialTime = 10.0; // fallback if user cancels popup
+    let zeroTime = 5.0;     // seconds for zero-mode
 
     let times = {
       [LEFT]: 0,
@@ -116,7 +118,6 @@
     };
 
     // preserveOnResume[side] === true means: when paused by user, keep the remaining time for zero-mode.
-    // If false, when starting zero-mode later the timer will be reset to zeroTime.
     let preserveOnResume = {
       [LEFT]: false,
       [RIGHT]: false
@@ -138,12 +139,22 @@
     const toggleButton = document.getElementById("toggleButton");
 
     // ask user for configuration on load
+    // initialTime: input in minutes (分). It's converted to seconds.
+    // zeroTime: input in seconds (秒).
     function askConfig() {
-      const init = parseFloat(prompt("初期カウントダウン秒数を入力してください", "10"));
-      const zero = parseFloat(prompt("0到達後に使う秒数を入力してください", "5"));
+      const initMin = parseFloat(prompt(
+        "初期カウントダウン時間を分単位で入力してください",
+        "2" // ~10秒
+      ));
+      const zeroSec = parseFloat(prompt(
+        "0到達後に使う時間を秒単位で入力してください",
+        "10"
+      ));
 
-      if (!isNaN(init) && init > 0) initialTime = init;
-      if (!isNaN(zero) && zero >= 0) zeroTime = zero;
+      if (!isNaN(initMin) && initMin > 0) initialTime = initMin * 60;
+      // If user cancels or enters invalid, keep fallback initialTime (seconds)
+
+      if (!isNaN(zeroSec) && zeroSec >= 0) zeroTime = zeroSec;
 
       times[LEFT] = initialTime;
       times[RIGHT] = initialTime;
@@ -166,9 +177,8 @@
       msgEls[RIGHT].textContent = "";
     }
 
-    // Stop the interval. byUser indicates whether this stop was caused by the user pressing the toggle button.
-    // If byUser === true, we should set preserveOnResume[currentSide] = true (so zero-mode remaining time is preserved).
-    // If byUser === false, preserveOnResume for the side should be false (so later starts will reset zero-mode).
+    // Stop the interval.
+    // byUser indicates whether this stop was caused by the user pressing the toggle button.
     function stopCountdown(setPaused = true, byUser = false) {
       if (timerId !== null) {
         clearInterval(timerId);
@@ -176,7 +186,6 @@
       }
       paused = setPaused;
 
-      // If we stopped by user and there is an active side, mark preserveOnResume for that side.
       if (currentSide !== null) {
         if (byUser) {
           // preserve whatever remaining time is currently for the side (including zero-mode).
@@ -203,7 +212,6 @@
       // - Otherwise, reset to zeroTime (fresh zero-mode).
       if (isZeroMode[side]) {
         if (!(preserveOnResume[side] && times[side] > 0)) {
-          // reset to configured zeroTime (non-persistent)
           times[side] = zeroTime;
         }
       }
@@ -221,7 +229,7 @@
           clearInterval(timerId);
           timerId = null;
 
-          // Since this stop is automatic (not user pressing pause), ensure we do NOT preserve zero-mode remaining time.
+          // automatic stop: do not preserve zero-mode remaining time
           preserveOnResume[side] = false;
 
           if (!isZeroMode[side]) {
@@ -263,7 +271,6 @@
       if (timerId === null) return;
       if (currentSide !== side) return;
 
-      // stop without preserving (user-initiated switch not equal to pressing toggle pause)
       stopCountdown(false, false);
       switchSide();
     }
@@ -298,7 +305,7 @@
       startCountdown(LEFT);
     });
 
-    // key and click handlers for switching the active side (same as before)
+    // key and click handlers for switching the active side
     document.addEventListener("keydown", (e) => {
       if (e.key.toLowerCase() === "a") handleStop(LEFT);
       if (e.key.toLowerCase() === "l") handleStop(RIGHT);
