@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <title>Chess Clock</title>
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      height: 100%;
+      font-family: sans-serif;
+    }
+
+    .container {
+      display: flex;
+      height: 100%;
+      position: relative;
+    }
+
+    .panel {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 4rem;
+      background-color: #f2f2f2;
+      border: 1px solid #ccc;
+      cursor: pointer;
+      user-select: none;
+      transition: opacity 0.2s ease, filter 0.2s ease;
+    }
+
+    .panel.inactive {
+      opacity: 0.5;
+      filter: brightness(0.85);
+    }
+
+    .right {
+      background-color: #eaeaea;
+    }
+
+    .center {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      z-index: 10;
+    }
+
+    button {
+      font-size: 1.5rem;
+      padding: 0.8em 1.5em;
+      cursor: pointer;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="panel" id="leftTimer">0.00</div>
+    <div class="panel right" id="rightTimer">0.00</div>
+
+    <div class="center">
+      <button id="startButton">スタート</button>
+    </div>
+  </div>
+
+  <script>
+    const LEFT = 0;
+    const RIGHT = 1;
+    const INTERVAL = 10; // 0.01秒刻み
+
+    let currentSide = null;
+    let timerId = null;
+
+    let initialTime = 10.0;
+    let zeroTime = 5.0;
+
+    let times = {
+      [LEFT]: 0,
+      [RIGHT]: 0
+    };
+
+    let isZeroMode = {
+      [LEFT]: false,
+      [RIGHT]: false
+    };
+
+    const panels = {
+      [LEFT]: document.getElementById("leftTimer"),
+      [RIGHT]: document.getElementById("rightTimer")
+    };
+
+    function askConfig() {
+      const init = parseFloat(
+        prompt("初期カウントダウン秒数を入力", "120")
+      );
+      const zero = parseFloat(
+        prompt("0秒到達後のカウントダウン秒数を入力", "10")
+      );
+
+      if (!isNaN(init) && init > 0) initialTime = init;
+      if (!isNaN(zero) && zero > 0) zeroTime = zero;
+
+      times[LEFT] = initialTime;
+      times[RIGHT] = initialTime;
+    }
+
+    function render() {
+      panels[LEFT].textContent = times[LEFT].toFixed(2);
+      panels[RIGHT].textContent = times[RIGHT].toFixed(2);
+
+      panels[LEFT].classList.toggle("inactive", currentSide !== LEFT);
+      panels[RIGHT].classList.toggle("inactive", currentSide !== RIGHT);
+    }
+
+    function startCountdown(side) {
+      currentSide = side;
+
+      if (isZeroMode[side]) {
+        times[side] = zeroTime;
+      }
+
+      render();
+
+      timerId = setInterval(() => {
+        times[side] -= INTERVAL / 1000;
+
+        if (times[side] <= 0) {
+          times[side] = 0;
+          stopCountdown();
+
+          if (!isZeroMode[side]) {
+            isZeroMode[side] = true;
+          }
+
+          switchSide();
+        }
+
+        render();
+      }, INTERVAL);
+    }
+
+    function stopCountdown() {
+      if (timerId !== null) {
+        clearInterval(timerId);
+        timerId = null;
+      }
+    }
+
+    function switchSide() {
+      const next = currentSide === LEFT ? RIGHT : LEFT;
+      startCountdown(next);
+    }
+
+    function handleStop(side) {
+      if (timerId === null) return;
+      if (currentSide !== side) return;
+
+      stopCountdown();
+      switchSide();
+    }
+
+    document.getElementById("startButton").addEventListener("click", () => {
+      stopCountdown();
+
+      times[LEFT] = initialTime;
+      times[RIGHT] = initialTime;
+
+      isZeroMode[LEFT] = false;
+      isZeroMode[RIGHT] = false;
+
+      startCountdown(LEFT);
+    });
+
+    document.addEventListener("keydown", (e) => {
+      if (e.key.toLowerCase() === "a") handleStop(LEFT);
+      if (e.key.toLowerCase() === "l") handleStop(RIGHT);
+    });
+
+    panels[LEFT].addEventListener("click", () => handleStop(LEFT));
+    panels[RIGHT].addEventListener("click", () => handleStop(RIGHT));
+
+    // 起動時設定
+    askConfig();
+    currentSide = null;
+    render();
+  </script>
+</body>
+</html>
