@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8" />
-  <title>Chess Clock</title>
+  <title>Dual Timer (Pause preserves zero-mode only when paused by user)</title>
   <style>
     html, body {
       margin: 0;
@@ -20,6 +20,7 @@
     .panel {
       flex: 1;
       display: flex;
+      flex-direction: column;
       align-items: center;
       justify-content: center;
       font-size: 4rem;
@@ -28,6 +29,8 @@
       cursor: pointer;
       user-select: none;
       transition: opacity 0.2s ease, filter 0.2s ease;
+      padding: 1rem;
+      box-sizing: border-box;
     }
 
     .panel.inactive {
@@ -39,39 +42,65 @@
       background-color: #eaeaea;
     }
 
+    .time {
+      font-size: 3.6rem;
+      line-height: 1;
+    }
+
+    .message {
+      margin-top: 0.6rem;
+      font-size: 1rem;
+      color: #d33;
+      height: 1.2em;
+    }
+
     .center {
       position: absolute;
       top: 50%;
       left: 50%;
       transform: translate(-50%, -50%);
       z-index: 10;
+      display: flex;
+      flex-direction: column;
+      gap: 0.6rem;
+      align-items: center;
     }
 
     button {
-      font-size: 1.5rem;
-      padding: 0.8em 1.5em;
+      font-size: 1.2rem;
+      padding: 0.6em 1.2em;
       cursor: pointer;
+      width: 160px;
     }
   </style>
 </head>
 <body>
   <div class="container">
-    <div class="panel" id="leftTimer">0.00</div>
-    <div class="panel right" id="rightTimer">0.00</div>
+    <div class="panel" id="leftTimer">
+      <div class="time" id="leftTime">0.00</div>
+      <div class="message" id="leftMsg"></div>
+    </div>
+
+    <div class="panel right" id="rightTimer">
+      <div class="time" id="rightTime">0.00</div>
+      <div class="message" id="rightMsg"></div>
+    </div>
 
     <div class="center">
-      <button id="startButton">スタート</button>
+      <button id="toggleButton">スタート</button>
     </div>
   </div>
 
   <script>
+    // constants
     const LEFT = 0;
     const RIGHT = 1;
-    const INTERVAL = 10; // 0.01秒刻み
+    const INTERVAL = 10; // ms (0.01s)
 
-    let currentSide = null;
-    let timerId = null;
-
+    // state
+    let currentSide = null;   // LEFT or RIGHT
+    let timerId = null;       // interval id when running
+    let paused = true;        // whether paused
     let initialTime = 10.0;
     let zeroTime = 5.0;
 
@@ -80,107 +109,204 @@
       [RIGHT]: 0
     };
 
+    // false: initial-timer mode, true: zero-mode (after initial reached)
     let isZeroMode = {
       [LEFT]: false,
       [RIGHT]: false
     };
 
+    // preserveOnResume[side] === true means: when paused by user, keep the remaining time for zero-mode.
+    // If false, when starting zero-mode later the timer will be reset to zeroTime.
+    let preserveOnResume = {
+      [LEFT]: false,
+      [RIGHT]: false
+    };
+
+    // DOM refs
     const panels = {
       [LEFT]: document.getElementById("leftTimer"),
       [RIGHT]: document.getElementById("rightTimer")
     };
+    const timeEls = {
+      [LEFT]: document.getElementById("leftTime"),
+      [RIGHT]: document.getElementById("rightTime")
+    };
+    const msgEls = {
+      [LEFT]: document.getElementById("leftMsg"),
+      [RIGHT]: document.getElementById("rightMsg")
+    };
+    const toggleButton = document.getElementById("toggleButton");
 
+    // ask user for configuration on load
     function askConfig() {
-      const init = parseFloat(
-        prompt("初期カウントダウン秒数を入力", "120")
-      );
-      const zero = parseFloat(
-        prompt("0秒到達後のカウントダウン秒数を入力", "10")
-      );
+      const init = parseFloat(prompt("初期カウントダウン秒数を入力してください", "10"));
+      const zero = parseFloat(prompt("0到達後に使う秒数を入力してください", "5"));
 
       if (!isNaN(init) && init > 0) initialTime = init;
-      if (!isNaN(zero) && zero > 0) zeroTime = zero;
+      if (!isNaN(zero) && zero >= 0) zeroTime = zero;
 
       times[LEFT] = initialTime;
       times[RIGHT] = initialTime;
     }
 
     function render() {
-      panels[LEFT].textContent = times[LEFT].toFixed(2);
-      panels[RIGHT].textContent = times[RIGHT].toFixed(2);
+      timeEls[LEFT].textContent = times[LEFT].toFixed(2);
+      timeEls[RIGHT].textContent = times[RIGHT].toFixed(2);
 
-      panels[LEFT].classList.toggle("inactive", currentSide !== LEFT);
-      panels[RIGHT].classList.toggle("inactive", currentSide !== RIGHT);
+      // darken panels that are not active or when stopped (timerId === null)
+      panels[LEFT].classList.toggle("inactive", currentSide !== LEFT || timerId === null);
+      panels[RIGHT].classList.toggle("inactive", currentSide !== RIGHT || timerId === null);
+
+      // update toggle label: running -> "一時停止", otherwise "スタート"
+      toggleButton.textContent = timerId !== null ? "一時停止" : "スタート";
     }
 
-    function startCountdown(side) {
-      currentSide = side;
+    function clearMessages() {
+      msgEls[LEFT].textContent = "";
+      msgEls[RIGHT].textContent = "";
+    }
 
-      if (isZeroMode[side]) {
-        times[side] = zeroTime;
+    // Stop the interval. byUser indicates whether this stop was caused by the user pressing the toggle button.
+    // If byUser === true, we should set preserveOnResume[currentSide] = true (so zero-mode remaining time is preserved).
+    // If byUser === false, preserveOnResume for the side should be false (so later starts will reset zero-mode).
+    function stopCountdown(setPaused = true, byUser = false) {
+      if (timerId !== null) {
+        clearInterval(timerId);
+        timerId = null;
+      }
+      paused = setPaused;
+
+      // If we stopped by user and there is an active side, mark preserveOnResume for that side.
+      if (currentSide !== null) {
+        if (byUser) {
+          // preserve whatever remaining time is currently for the side (including zero-mode).
+          preserveOnResume[currentSide] = true;
+        } else {
+          // not a user-initiated pause: do not preserve zero-mode remaining time
+          preserveOnResume[currentSide] = false;
+        }
       }
 
       render();
+    }
+
+    // start countdown on given side
+    function startCountdown(side) {
+      currentSide = side;
+      paused = false;
+
+      // Clear any message for this side when starting.
+      msgEls[side].textContent = "";
+
+      // If we're in zero-mode for this side:
+      // - If preserveOnResume[side] is true and times[side] > 0, keep the current remaining time (user paused earlier).
+      // - Otherwise, reset to zeroTime (fresh zero-mode).
+      if (isZeroMode[side]) {
+        if (!(preserveOnResume[side] && times[side] > 0)) {
+          // reset to configured zeroTime (non-persistent)
+          times[side] = zeroTime;
+        }
+      }
+
+      render();
+
+      if (timerId !== null) return; // already running
 
       timerId = setInterval(() => {
         times[side] -= INTERVAL / 1000;
 
         if (times[side] <= 0) {
           times[side] = 0;
-          stopCountdown();
+          // stop interval
+          clearInterval(timerId);
+          timerId = null;
+
+          // Since this stop is automatic (not user pressing pause), ensure we do NOT preserve zero-mode remaining time.
+          preserveOnResume[side] = false;
 
           if (!isZeroMode[side]) {
+            // initial timer reached 0 -> enter zero-mode
             isZeroMode[side] = true;
-          }
 
-          switchSide();
+            if (zeroTime > 0) {
+              // start zero-mode fresh (reset to zeroTime)
+              times[side] = zeroTime;
+              startCountdown(side); // will obey preserveOnResume logic (currently false => reset)
+            } else {
+              // zeroTime == 0 -> immediate auto-stop with message
+              msgEls[side].textContent = "0秒に到達しました";
+              paused = true;
+              render();
+            }
+          } else {
+            // already in zero-mode and it reached 0 -> show message and pause (automatic)
+            msgEls[side].textContent = "0秒に到達しました";
+            paused = true;
+            render();
+          }
+          return;
         }
 
         render();
       }, INTERVAL);
     }
 
-    function stopCountdown() {
-      if (timerId !== null) {
-        clearInterval(timerId);
-        timerId = null;
-      }
-    }
-
+    // switch to opposite side (start it)
     function switchSide() {
       const next = currentSide === LEFT ? RIGHT : LEFT;
       startCountdown(next);
     }
 
+    // handle "stop" from user/key/click that causes immediate switch to other side
+    // This stop is treated as NOT a user "pause" for preservation purposes (so byUser=false).
     function handleStop(side) {
       if (timerId === null) return;
       if (currentSide !== side) return;
 
-      stopCountdown();
+      // stop without preserving (user-initiated switch not equal to pressing toggle pause)
+      stopCountdown(false, false);
       switchSide();
     }
 
-    document.getElementById("startButton").addEventListener("click", () => {
-      stopCountdown();
+    // Toggle button behavior:
+    // - If running -> treat as user pause: stopCountdown(setPaused=true, byUser=true)
+    // - Else if paused and have an active side -> resume that side
+    // - Else -> fresh start (initialize and start left)
+    toggleButton.addEventListener("click", () => {
+      if (timerId !== null) {
+        // running -> pause by user (preserve remaining times, including zero-mode)
+        stopCountdown(true, true);
+        return;
+      }
 
+      // not running
+      if (paused && currentSide !== null) {
+        // resume same side
+        startCountdown(currentSide);
+        return;
+      }
+
+      // fresh start
+      stopCountdown(false, false);
       times[LEFT] = initialTime;
       times[RIGHT] = initialTime;
-
       isZeroMode[LEFT] = false;
       isZeroMode[RIGHT] = false;
-
+      preserveOnResume[LEFT] = false;
+      preserveOnResume[RIGHT] = false;
+      clearMessages();
       startCountdown(LEFT);
     });
 
+    // key and click handlers for switching the active side (same as before)
     document.addEventListener("keydown", (e) => {
       if (e.key.toLowerCase() === "a") handleStop(LEFT);
       if (e.key.toLowerCase() === "l") handleStop(RIGHT);
     });
-
     panels[LEFT].addEventListener("click", () => handleStop(LEFT));
     panels[RIGHT].addEventListener("click", () => handleStop(RIGHT));
 
-    // 起動時設定
+    // initial config and render
     askConfig();
     currentSide = null;
     render();
